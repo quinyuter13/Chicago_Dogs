@@ -1,0 +1,120 @@
+---
+title: "First.Pitch.Stats"
+author: "Quin Yuter"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+
+Reading in the game logs from the entire season
+```{r}
+allgames <- read.csv("/Users/quinyuter/Desktop/Chicago Dogs/Exploratory Analytics/all_games_as_of_6_4 - all_games_as_of_6_4.csv")
+```
+
+Some Data Wrangling
+```{r}
+## Getting only the first pitch of each hitter's AB
+First.pitch <- allgames %>%
+  filter(Batter_Team == "CHI", 
+         Balls == 0, 
+         Strikes == 0)
+
+## Donivan Williams had two different batter names
+First.pitch$Batter[First.pitch$Batter == 'williams, D'] <- 'Williams, D'
+```
+
+### Finding total swings and Swing percentage
+```{r}
+## Getting only batters and what happened on the first pitch
+First.pitch.data <- First.pitch %>%
+  group_by(Batter, Description) %>%
+  summarize(Pitches = n())
+
+## Replacing any empty values with NA
+First.pitch.data[First.pitch.data == ''] <- NA
+
+## Dropping any NA values and pivoting the dataframe
+First.pitch.data.advanced <- First.pitch.data %>%
+  drop_na() %>%
+  pivot_wider(names_from = Description, values_from = Pitches)
+
+## Replacing NA with 0 so we can find total First pitches seen 
+First.pitch.data.advanced[is.na(First.pitch.data.advanced)] <- 0
+```
+
+Adding some advanced stats
+```{r}
+## Finding total first pitches seen and Swing percentage
+First.pitch.data.advanced <- First.pitch.data.advanced %>%
+  mutate(Total = ball + called_strike + foul + hit_by_pitch + hit_into_play + swinging_strike + foul_tip, 
+         SwingPCT = ((foul + hit_into_play + swinging_strike + foul_tip)/Total)*100)
+
+## Rounding swing percentage to 2 decimal places
+First.pitch.data.advanced$SwingPCT <- round(First.pitch.data.advanced$SwingPCT, 2)
+
+## Reordering Data Frame
+First.pitch.data.advanced <- First.pitch.data.advanced[, c(1, 9, 10, 2, 3, 4, 5, 6, 7, 8)]
+
+knitr::kable(First.pitch.data.advanced)
+```
+
+### Finding Hitting Stats off first pitch
+```{r}
+## Getting only the At Bats where the AB ended after the first pitch
+Batting.stats <- First.pitch %>%
+  filter(Description == 'hit_into_play') %>%
+  group_by(Batter, Events) %>%
+  summarise(AB = n()) %>%
+  pivot_wider(names_from = Events, values_from = AB)
+
+## Reassigning 0 to all NA values
+Batting.stats[is.na(Batting.stats)] <- 0
+
+## Finding total number of At Bats to be able to find things like BA, OBP, SLG
+Batting.stats <- Batting.stats %>%
+  mutate(PA = field_out + home_run + single + ground_double_play + sac_bunt + field_error + double + sac_fly, 
+         AB = field_out + home_run + single + ground_double_play + field_error + double, 
+         BA = (home_run + single + double)/AB)
+
+## Rounding batting average to 3 decimal places
+Batting.stats$BA <- round(Batting.stats$BA, 3)
+
+## Reordering the data frame
+Batting.stats <- Batting.stats[, c(1, 10, 11, 12, 4, 8, 3, 2, 7, 6, 9, 5)]
+
+knitr::kable(Batting.stats)
+```
+
+### Merging the two data frames
+```{r}
+## Getting only the necessary columns from both of the data frames
+table1 <- First.pitch.data.advanced %>%
+  select(Batter, Total, SwingPCT)
+
+table2 <- Batting.stats %>%
+  select(Batter, AB, BA)
+
+## Merging the data frames together
+total.stats <- merge(table1, table2)
+
+## Renaming some columns to make them more meaningful
+total.stats <- total.stats %>%
+  rename('Num hit into play' = AB)
+
+knitr::kable(total.stats)
+```
+
+
+
+
+
+
+
+

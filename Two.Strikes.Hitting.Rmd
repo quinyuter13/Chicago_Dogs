@@ -1,0 +1,77 @@
+---
+title: "Two.Strike.Hitting"
+author: "Quin Yuter"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+Reading in the game logs from the entire season
+```{r}
+allgames <- read.csv("/Users/quinyuter/Desktop/Chicago Dogs/Exploratory Analytics/all_games_as_of_6_4 - all_games_as_of_6_4.csv")
+```
+
+Some data wrangling
+```{r}
+## Creating the Outcomes variable to make each Event more broad
+two.strikes <- allgames %>%
+  filter(Batter_Team == "CHI", 
+         Strikes == 2) %>%
+  filter(Description != 'foul') %>%
+  mutate(Outcome = case_when(Events == "walk" ~ 'Walk', 
+                             Events == 'single' ~ '1B',
+                             Events == 'double' ~ '2B',
+                             Events == 'triple' ~ '3B',
+                             Events == 'home_run' ~ 'HR',
+                             Events %in% c('field_out', 'ground_double_play') ~ 'Field Out', 
+                             Events == 'strikeout' ~ 'Strikeout', 
+                             Events == 'field_error' ~ 'ROE',
+                             Events == 'sac_fly' ~ 'Sac Fly',
+                             Events == 'hit_by_pitch' ~ 'HBP')) %>%
+  filter(!is.na(Outcome))
+
+## Donivan Williams had two different batter names
+two.strikes$Batter[two.strikes$Batter == 'williams, D'] <- 'Williams, D'
+```
+
+Getting an easier to read data table
+```{r}
+## Grabbing only the necessary data and finding totals of each event per batter
+two.strikes.data <- two.strikes %>%
+  group_by(Batter, Outcome) %>%
+  summarize(At_Bats = n()) %>%
+  pivot_wider(names_from = Outcome, values_from = At_Bats)
+
+## Replacing NA with 0 so we can find total at bats 
+two.strikes.data[is.na(two.strikes.data)] <- 0
+
+## Finding total at bats
+two.strikes.data <- two.strikes.data %>%
+  mutate(Hits = `1B` + `2B` + `HR`) %>%
+  mutate(PA = Walk + Hits + `Field Out` + Strikeout + ROE + `Sac Fly` + HBP, 
+         AB = Hits + `Field Out` + Strikeout + ROE)
+
+two.strikes.data <- two.strikes.data[, c(1,12, 13, 11, 2, 3, 6, 7, 4, 8, 5, 9, 10)]
+
+knitr::kable(two.strikes.data)
+```
+
+```{r}
+Advanced.stats <- two.strikes.data %>%
+  mutate(AVG = as.numeric(format(round(Hits/AB, 3), nsmall = 3)), 
+         OBP = as.numeric(format(round((Hits + Walk + HBP)/PA, 3), nsmall = 3)), 
+         SLG = as.numeric(format(round((`1B` + 2*`2B` + 4*HR)/AB, 3), nsmall = 3)), 
+         OPS = OBP + SLG)
+
+knitr::kable(Advanced.stats)
+```
+
+
+
+
