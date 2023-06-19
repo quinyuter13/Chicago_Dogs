@@ -1,0 +1,140 @@
+---
+title: "Pitcher.Summary"
+author: "Quin Yuter"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+
+Reading in the csv
+```{r}
+gamecsv <- read_csv("/Users/quinyuter/Desktop/Chicago Dogs/KSC 6_17.csv")
+```
+
+Getting just Tyler Palm's performance
+```{r}
+palm <- gamecsv %>%
+  filter(Pitcher == "Palm, T") %>%
+  mutate(Inning = 1)
+```
+
+Adding innings to the data frame
+```{r}
+Inning <- 1
+for (i in 2:nrow(palm)) {
+  palm$Inning[i] <- Inning
+  prior <- i - 1
+  if(palm$Outs[i] == 0 & palm$Outs[prior] > 0){ 
+    Inning <- Inning + 1
+  }
+  palm$Inning[i] <- Inning
+}
+```
+
+
+Creating new data frame for summary statistics
+```{r}
+summary <-data.frame(Pitcher = palm$Pitcher[2],
+         IP = 0, 
+         XBH = 0, 
+         `Total Pitches` = 0,
+         `Total Batters` = 0,
+         K = 0, 
+         BB = 0, 
+         HBP = 0, 
+         `GB Outs` = 0, 
+         `FB Outs` = 0, 
+         `FP Strikes` = 0, 
+         FB.AVG = 0, 
+         FB.High = 0, 
+         CB.AVG = 0, 
+         CB.High = 0, 
+         SL.Cut.Avg = 0, 
+         SL.Cut.High = 0, 
+         CH.Avg = 0, 
+         CH.High = 0)
+```
+
+Adding in data to the dataframe
+```{r}
+## Innings Pitched
+Latest.IP <- max(palm$Inning)
+IP <- palm %>%
+  filter(Inning == Latest.IP)
+summary$IP <- round(Latest.IP + (max(IP$Outs))/3, 2)
+
+## XBH
+summary$XBH <- nrow(palm[palm$Events %in% c('home_run', 'double', 'triple'), ])
+
+## Total Pitches
+summary$Total.Pitches <- nrow(palm)
+
+## Strikeouts
+summary$K <- nrow(palm[palm$Events %in% c('strikeout'), ])
+
+## Walks
+summary$BB <- nrow(palm[palm$Events %in% c('walk'), ])
+
+## Hit By Pitch
+summary$HBP <- nrow(palm[palm$Events %in% c('hit_by_pitch'), ])
+
+## Ground Ball Outs
+summary$GB.Outs <- nrow(palm[palm$BB_Type %in% c('ground_ball') & palm$Events %in% c('field_out'), ])
+
+## Fly Ball Outs
+summary$FB.Outs <- nrow(palm[palm$BB_Type %in% c('fly_ball', 'pop_fly') & palm$Events %in% c('field_out'), ])
+
+## First pitch strikes
+summary$FP.Strikes <- nrow(palm[palm$Balls %in% c(0) & palm$Strikes %in% c(0) & palm$Description %in% c('called_strike', 'swinging_strike', 'foul', 'foul_tip', 'hit_into_play'), ])
+
+## Total Batter faced
+Batters <- palm %>%
+  filter(Balls == 0, 
+         Strikes == 0)
+summary$Total.Batters <- nrow(palm[palm$Balls %in% c(0) & palm$Strikes %in% c(0), ])
+
+## Average fastball
+FB <- palm %>%
+  filter(Pitch_Type %in% c('FF', 'FT', 'FC'))
+summary$FB.AVG <- round(mean(FB$MPH), 2)
+
+## Max Fastball Velocity
+summary$FB.High <- max(FB$MPH)
+
+## Average Curveball
+CB <- palm %>%
+  filter(Pitch_Type == 'CU')
+summary$CB.AVG <- round(mean(CB$MPH), 2)
+
+## Max Curveball Velocity
+summary$CB.High <- max(CB$MPH)
+
+## Average Slider/Cutter Velocity
+SL.Cut <- palm %>%
+  filter(Pitch_Type %in% c('SL', 'FC'))
+summary$SL.Cut.Avg <- round(mean(SL.Cut$MPH), 2)
+
+## Max Slider/Cutter Velocity
+summary$SL.Cut.High <- max(SL.Cut$MPH)
+
+## Average Changeup Velocity
+CH <- palm %>%
+  filter(Pitch_Type == 'CH')
+summary$CH.Avg <- round(mean(CH$MPH), 2)
+
+## Max Changeup Velocity
+summary$CH.High <- max(CH$MPH)
+```
+
+Printing new dataframe
+```{r}
+knitr::kable(summary)
+```
+
