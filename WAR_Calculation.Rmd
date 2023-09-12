@@ -1,0 +1,233 @@
+---
+title: "WAR_Calculation"
+author: "Quin Yuter"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+
+```
+
+All information on how to calculate WAR is gotten from https://library.fangraphs.com/calculating-position-player-war-a-complete-example/ 
+
+# Some data cleaning and initial stats
+
+Getting a dataframe of the entire league's stats
+```{r}
+league.stats <- read.csv("/Users/quinyuter/Desktop/Chicago Dogs/Exploratory Analytics/league_stats.csv")
+```
+
+```{r}
+## Merging duplicates
+league.stats <- league.stats %>%
+  group_by(Name) %>%
+  summarise(across(c("G", "PA", "AB", "R", "H", "X2B", "X3B", "HR", "RBI", "SB", "CS", "BB", "SO", "BA", "OBP", "SLG", "OPS", "TB", "HBP", "SH", "SF", "IBB"), sum))
+```
+
+```{r}
+## wOBA and wRC are needed for later calculations
+league.stats <- league.stats %>%
+  mutate(uBB = BB - IBB,
+         Single = H - X2B - X3B - HR,
+         wOBA = (0.690*uBB + 0.722*HBP + 0.888*Single + 1.271*X2B + 1.616*X3B + 2.101*HR)/(AB + BB - IBB + SF + HBP))
+```
+
+
+Finding Batting Runs
+```{r}
+## Calculated by colleague
+league.wOBA <- 0.340
+park.factor <- 1.06
+
+## Need full league runs and plate appearances
+lgR <- sum(league.stats$R)
+lgPA <- sum(league.stats$PA)
+
+## Finding wRAA, which can be converted into Batting Runs
+league.stats <- league.stats %>%
+  mutate(wRAA = ((wOBA - league.wOBA)/1.277)*PA) ## 1.277 is the wOBA scale
+
+## Finding wRC (weighted Runs Created), which is needed to convert wRAA to batting runs
+league.stats <- league.stats %>%
+  mutate(wRC = (((wOBA - league.wOBA)/1.277) + (lgR/lgPA))*PA)
+
+
+## Using prior stats to get Batting runs
+league.stats <- league.stats %>%
+  mutate(Batting.Runs = wRAA + (lgR/lgPA - ((park.factor*lgR)/lgPA))*PA + (lgR/lgPA - (mean(league.stats$wRC)/PA))*PA) 
+```
+
+Finding Base Running Runs
+```{r}
+## There are two components to Base Running Runs: Ultimate Base Running (UBR) and Weighted Stolen Base Runs (wSB). 
+
+## League Stolen base runs (lgwSB) is needed to find wSB, so we find that first. However, we need to know the run value of a caught stealing (runCS) to find lgwSB, so lets find that before calculating lgwSB
+league.stats <- league.stats %>%
+  mutate(yielded.outs = AB - H) ## Needed to find runs per outs
+RunSB <- 0.2 ## Determined by the league
+runCS <- -(2*(sum(league.stats$R)/sum(league.stats$yielded.outs)) + 0.075)
+
+lgwSB <- (mean(league.stats$SB)*RunSB + mean(league.stats$CS)*runCS)/(mean(league.stats$Single) + mean(league.stats$BB) + mean(league.stats$HBP) - mean(league.stats$IBB)) 
+
+## Now, let's do wSB
+league.stats <- league.stats %>%
+  mutate(wSB = SB*RunSB + CS*runCS - lgwSB*(Single + BB + HBP - IBB))
+
+## After using MLB data to build a linear model that can predict  players' UBR, we can add said data into our dataframe. To find BsR (Base Running Runs), we just add the wSB and UBR
+
+leagueUBR <- read.csv("/Users/quinyuter/Desktop/Chicago Dogs/Exploratory Analytics/LeagueUBR.csv") %>%
+  select(Name, UBR)
+
+league.stats <- merge(league.stats, leagueUBR, by.x = "Name", by.y = "Name")
+
+league.stats <- league.stats %>%
+  mutate(BsR = wSB + UBR)
+```
+
+
+Position Adjustment
+```{r}
+## To find positional adjustment, you follow the equation (Innings Played/9)/100 * position specific run value (Since there are 100 games in the season)
+
+## The position specific run values are as followed:
+# Catcher = +12.5
+# First Base = -12.5
+# Second Base = +2.5
+# Third Base =  +2.5
+# Shortstop = +7.5
+# Left Field = -7.5
+# Center Field = +2.5
+# Right Field = -7.5
+# Designated Hitter = -17.5
+
+## Assigning positional run values to each Chicago Dogs player.
+  ## Note: For each player, I am using the position specific run value for the position that they have played the most    innings at
+
+dogs.war <- league.stats %>%
+  filter(Name %in% c("Josh Altmann", "Cody Bohanek", "Matt Bottcher*", "Nick Heath*", "Ryan Lidge#", "Ben Livorsi*", "Jesus Lujano*", "Luke Mangieri*", "General McArthur", "Brennan Metzger", "Dylan Rosa", "Payton Eeles*", "Caeden Harris", "Johnni Turbo"))
+
+
+dogs.war <- dogs.war %>%
+  mutate(pos.spec.val = 0,
+         IP = 0)
+
+dogs.war["1", "pos.spec.val"] <- 12.5    ## Ben Livorsi: C
+dogs.war["2", "pos.spec.val"] <- -7.5   ## Brennan Metzger: LF
+dogs.war["3", "pos.spec.val"] <- -7.5    ## Caeden Harris: RF
+dogs.war["4", "pos.spec.val"] <- 2.5     ## Cody Bohanek: 3B
+dogs.war["5", "pos.spec.val"] <- -7.5    ## Dylan Rosa: LF
+dogs.war["6", "pos.spec.val"] <- -7.5   ## General McArthur IV: RF
+dogs.war["7", "pos.spec.val"] <- -7.5    ## Jesus Lujano: RF
+dogs.war["8", "pos.spec.val"] <- 2.5     ## Johnni Turbo: CF
+dogs.war["9", "pos.spec.val"] <- 7.5     ## Josh Altmann: SS
+dogs.war["10", "pos.spec.val"] <- -12.5  ## Luke Mangieri: 1B
+dogs.war["11", "pos.spec.val"] <- 2.5     ## Matt Bottcher: 2B
+dogs.war["12", "pos.spec.val"] <- 2.5     ## Nick Heath: CF
+dogs.war["13", "pos.spec.val"] <- 2.5    ## Payton Eeles: 2B
+dogs.war["14", "pos.spec.val"] <- 12.5    ## Ryan Lidge: C
+
+## Adding Innings played
+  ## This is done manually weekly
+
+dogs.war["1", "IP"] <- 113.2    ## Ben Livorsi
+dogs.war["2", "IP"] <- 351.1   ## Brennan Metzger
+dogs.war["3", "IP"] <- 25    ## Caeden Harris
+dogs.war["4", "IP"] <- 653     ## Cody Bohanek
+dogs.war["5", "IP"] <- 213.4    ## Dylan Rosa
+dogs.war["6", "IP"] <- 35   ## General McArthur IV
+dogs.war["7", "IP"] <- 540.2    ## Jesus Lujano
+dogs.war["8", "IP"] <- 18     ## Johnni Turbo
+dogs.war["9", "IP"] <- 647     ## Josh Altmann
+dogs.war["10", "IP"] <- 612  ## Luke Mangieri
+dogs.war["11", "IP"] <- 557.2     ## Matt Bottcher
+dogs.war["12", "IP"] <- 450     ## Nick Heath
+dogs.war["13", "IP"] <- 115    ## Payton Eeles
+dogs.war["14", "IP"] <- 500.2    ## Ryan Lidge
+
+## Computing positional adjustment
+dogs.war <- dogs.war %>%
+  mutate(pos.adj = ((IP/9)/100)*pos.spec.val)
+```
+
+Fielding Runs
+```{r}
+## Note: Fangraphs uses UZR (Ultimate Zone Rating) to determine fielding runs. However, there is no way for us to calculate this stat. Fangraphs takes into account Outfield Arm Runs, Double Play Runs, Range Runs, and Error Runs to assign UZR to a player. We don't have the sufficient data to find these things. Therefore, we can't be creative and use predictive modeling like for Base Running Runs
+
+## Method: Fangraphs has a tier system that can be used to interpret UZR and evaluate a player's defensive ability. The tiers are as follows: -15 UZR =  Awful, -10 UZR = Poor, -5 UZR = Below Average, 0 = Average, +5 = Above Average, +10 = Great, +15 = Gold Glove Caliber. So, using these tiers, my colleagues and I assigned UZR numbers to each player using our knowledge of their fielding abilities.
+
+dogs.war <- dogs.war %>%
+  mutate(fielding.runs = 0)
+
+dogs.war["1", "fielding.runs"] <- 0    ## Ben Livorsi
+dogs.war["2", "fielding.runs"] <- 0   ## Brennan Metzger
+dogs.war["3", "fielding.runs"] <- 0    ## Caeden Harris
+dogs.war["4", "fielding.runs"] <- 13     ## Cody Bohanek
+dogs.war["5", "fielding.runs"] <- 5    ## Dylan Rosa
+dogs.war["6", "fielding.runs"] <- 0   ## General McArthur IV
+dogs.war["7", "fielding.runs"] <- 2    ## Jesus Lujano
+dogs.war["8", "fielding.runs"] <- 0     ## Johnni Turbo
+dogs.war["9", "fielding.runs"] <- 3     ## Josh Altmann
+dogs.war["10", "fielding.runs"] <- 3  ## Luke Mangieri
+dogs.war["11", "fielding.runs"] <- 0     ## Matt Bottcher
+dogs.war["12", "fielding.runs"] <- 12     ## Nick Heath
+dogs.war["13", "fielding.runs"] <- 0    ## Payton Eeles
+dogs.war["14", "fielding.runs"] <- 2    ## Ryan Lidge
+```
+
+
+League Adjustment
+```{r}
+## Note: League Adjustment calls for total league fielding runs and total league positional adjustment, both of which are stats that I don't have the ability to get. So, I am just going to multiply the Chicago Dog's total fielding runs and positional adjustment by 12, since there are 12 teams in the league, and use those numbers
+
+lgFR <- 12*sum(dogs.war$fielding.runs)
+lgPosAdj <- 12*sum(dogs.war$pos.adj)
+
+dogs.war <- dogs.war %>%
+  mutate(lgAdj = ((-1)*(sum(league.stats$Batting.Runs) + sum(league.stats$BsR) + lgFR + lgPosAdj)/lgPA)*PA)
+```
+
+Replacement Runs
+```{r}
+## We use 2430 games in this calculation because out of 2430 games, 1000 of the wins are because of players with positive WAR. We then use 570 because 57% of said wins come from position players, with the remaining 43% coming from pitching
+## There are 100 games in an American Association of Professional Baseball season, which is where the 100 comes from.
+## Part of the finding replacement runs is finding runs per win, which technically signifies how many runs it takes to achieve a win. I am going to find that first
+
+## Numerator in fraction is total AAPB runs, Denominator is total AAPB IP
+RPW <- 9*(4014/6457)*1.5 + 3
+
+## Now, we find Replacement level runs
+dogs.war <- dogs.war %>%
+  mutate(replacement_runs = (570*(100/2430))*(RPW/lgPA)*PA)
+```
+
+## THE FINAL PRODUCT
+
+```{r}
+dogs.war <- dogs.war %>%
+  mutate(WAR = round(((Batting.Runs + BsR + fielding.runs + pos.adj + lgAdj + replacement_runs)/RPW), 1))
+
+## Getting a data frame with just the WAR
+
+final.WAR <- dogs.war %>%
+  select(Name, WAR)
+
+## Writing this as a csv
+write.csv(final.WAR, "/Users/quinyuter/Desktop/Chicago Dogs/Exploratory Analytics/dogsWAR.csv")
+```
+
+
+
+
+
+
+
+
+
+
+

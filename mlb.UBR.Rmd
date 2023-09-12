@@ -1,0 +1,133 @@
+---
+title: "mlb.UBR"
+author: "Quin Yuter"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(leaps)
+library(ggplot2)
+library(ggfortify)
+library(caret)
+library(car)
+library(knitr)
+```
+
+data frame
+```{r}
+mlb.UBR <- read_csv("/Users/quinyuter/Desktop/Chicago Dogs/mlb.UBR.csv") %>%
+  filter(!is.na(UBR))
+
+## Because the American Association is only 76 games into the season, but the MLB was 100 games in at the time this information was taken, I need to do some simple proportions so that the stats line up. This only really matters for the stats that matter and that compound, aka stats that only increase that can only go up.. 
+mlb.UBR <- mlb.UBR %>%
+  mutate(across(c(b_rbi, b_total_bases, r_total_stolen_base, b_gnd_into_dp, r_run, ab, pa, single, hit, double, triple, home_run, strikeout, walk, ), function(x) x*(76/100)))
+```
+
+```{r}
+UBR.full <- lm(UBR ~ pa + hit + single + double + triple + batting_avg + slg_percent + b_total_bases + r_total_stolen_base + b_gnd_into_dp + r_run, data = mlb.UBR)
+autoplot(UBR.full)
+```
+The linearity assumption is broken, so we must transform the predictors
+
+```{r}
+UBR.full2 <- lm(UBR ~ sqrt(pa) + sqrt(hit) + sqrt(single) + sqrt(double) + sqrt(triple) + sqrt(batting_avg) + sqrt(slg_percent) + sqrt(b_total_bases) + sqrt(r_total_stolen_base) + sqrt(b_gnd_into_dp) + sqrt(r_run), data = mlb.UBR)
+autoplot(UBR.full2)
+```
+The assumptions look much better satisfied, so lets move on.
+
+## Model Selection
+
+backwards
+```{r}
+UBR.back <- stats::step(UBR.full2, direction = "backward")
+```
+
+```{r}
+summary(UBR.back)
+```
+
+
+
+forward
+```{r}
+UBR.null <- lm(UBR ~ 1, data = mlb.UBR)
+UBR.forward <- step(UBR.null, scope = formula(UBR.full2), direction = "forward")
+```
+```{r}
+summary(UBR.forward)
+```
+
+
+Best subsets regression
+```{r}
+library(leaps)
+UBR.subs <- regsubsets(formula(UBR.full2), data = mlb.UBR, nbest = 2, nvmax = 10)
+
+subsets(UBR.subs, statistic = "adjr2", legend = FALSE)
+```
+Although hard to see, it looks like subset size 3-4 has the highest Adjusted R-Squared value, so lets see the variables in those subset sizes
+```{r}
+summary(UBR.subs)
+```
+I am going to fit a model with 3 variables
+```{r}
+adjr3 <- lm(UBR ~ sqrt(r_total_stolen_base) + sqrt(b_gnd_into_dp) + sqrt(r_run), data = mlb.UBR)
+```
+
+bic
+```{r}
+subsets(UBR.subs, statistic = "bic", legend = FALSE)
+```
+The subset size with the lowest value bic looks to be just one variable (sqrt(r___)), but that isn't a sufficient enough amount of variables, so I am going to use a 3 variable model. Looking at the summary from earlier, the other model with 3 variables uses the square root of total stolen bases, total runs, and total doubles
+```{r}
+bic3 <- lm(UBR ~ sqrt(r_total_stolen_base) + sqrt(double) + sqrt(r_run), data = mlb.UBR)
+```
+
+
+```{r}
+library(broom)
+bind_rows(
+  glance(UBR.full2) %>% mutate(Model="Full Model"),
+  glance(UBR.forward) %>% mutate(Model="Forward"), 
+  glance(UBR.back) %>% mutate(Model="Backward"),
+  glance(adjr3) %>% mutate(Model="Best subsets: Adjusted R-squared"),
+  glance(bic3) %>% mutate(Model="Best subsets: BIC")) %>%
+  select(Model, `Adjusted R-Squared` = adj.r.squared,
+         AIC, BIC) %>%
+  kable()
+```
+
+It looks like both the best subsets BIC model and the backward stepwise regression model are the same. I am choosing them because they have the highest adjusted R-squared value, the lowest AIC value, and the second lowest BIC value. Therefore, we are going to use total stolen bases, runs, and doubles to predict what the UBR would be for our players. 
+
+## Prediction
+
+Using the entire leagues stats, I am assigning the UBR to everyone in the league
+```{r}
+league <- read.csv("/Users/quinyuter/Desktop/Chicago Dogs/Exploratory Analytics/league_stats.csv") %>%
+  select(Name, X2B, R, SB) %>%
+  mutate(UBR = 0)
+
+## Merging duplicates
+league <- league %>%
+  group_by(Name) %>%
+  summarise(across(c("X2B", "R", "SB"), sum))
+
+for (i in 1:nrow(league)) {
+  league$UBR[i] <- round(predict(UBR.back, data.frame(r_total_stolen_base = league$SB[i], r_run = league$R[i], double = league$X2B[i])), 1)
+}
+```
+
+## Writing the csv
+
+In order to use this data on a separate Rmarkdown, I have to save this dataframe as a csv and reload it on the other one
+```{r}
+library(readr)
+write.csv(league, "/Users/quinyuter/Desktop/Chicago Dogs/Exploratory Analytics/LeagueUBR.csv")
+```
+
